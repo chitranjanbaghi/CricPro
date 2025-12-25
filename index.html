@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CricScore Pro</title>
+    
+    <!-- Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/vue-demi"></script>
+    <script src="https://unpkg.com/pinia@2.1.7/dist/pinia.iife.prod.js"></script>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Config & Styles -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 750: '#2d3748', 850: '#1a202c', 900: '#111827', 950: '#0b0f19' },
+                        neon: { blue: '#3b82f6', green: '#10b981', red: '#ef4444', amber: '#f59e0b', cyan: '#06b6d4' },
+                    },
+                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'], display: ['Oswald', 'sans-serif'] },
+                    animation: { 'breathing': 'breathing 2s ease-in-out infinite' },
+                    keyframes: {
+                        'breathing': { '0%, 100%': { transform: 'scale(1)', opacity: '1' }, '50%': { transform: 'scale(1.02)', opacity: '0.9' } }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style type="text/tailwindcss">
+        .glass-panel { @apply bg-slate-900/80 backdrop-blur-md border border-white/5 shadow-xl; }
+        .game-card { @apply relative overflow-hidden rounded-xl border border-slate-700/50 bg-slate-800/40 flex flex-col justify-between transition-all duration-200 select-none; min-height: 140px; }
+        .card-active-striker { @apply border-neon-blue bg-blue-900/20 shadow-[0_0_15px_rgba(59,130,246,0.4)] scale-[1.01]; }
+        .card-active-nonstriker { @apply border-blue-400/50 bg-blue-900/10; }
+        .card-active-bowler { @apply border-neon-cyan bg-cyan-900/20 shadow-[0_0_15px_rgba(6,182,212,0.4)] scale-[1.01]; }
+        .selection-required { @apply border-neon-green/80 bg-emerald-900/10 animate-breathing cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.4)]; }
+        .label-text { @apply text-[9px] uppercase font-bold text-slate-500 tracking-wider; }
+        .data-text { @apply font-mono font-bold text-white; }
+        .btn-action { @apply active:scale-95 transition-transform flex items-center justify-center rounded-lg font-bold uppercase tracking-wide shadow-md; }
+        .btn-score { @apply bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 text-xl font-black shadow-inner; }
+    </style>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-slate-950 text-white font-sans h-screen flex flex-col overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
+    
+    <div id="app"></div>
+
+    <!-- Templates -->
+
+    <template id="t-app-header">
+        <div class="glass-panel border-b-0 h-14 min-h-[3.5rem] z-30 flex justify-between items-center px-4 shrink-0">
+            <div class="flex items-center gap-2 text-neon-green font-display tracking-wide font-bold text-lg">
+                <i class="ph-fill ph-cricket-ball text-2xl"></i>
+                <span class="hidden sm:inline bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">CricScore</span>
+            </div>
+            <div class="flex bg-black/40 p-1 rounded-full border border-white/5">
+                <button v-for="tab in ['live', 'scorecard', 'history']" :key="tab"
+                    class="px-5 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all duration-300"
+                    :class="currentTab === tab ? 'bg-slate-700 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
+                    @click="$emit('update:currentTab', tab)">
+                    {{ tab }}
+                </button>
+            </div>
+            <div class="w-10 flex justify-end">
+                <button class="text-slate-400 hover:text-white" @click="$emit('open-settings')"><i class="ph-bold ph-gear text-xl"></i></button>
+            </div>
+        </div>
+    </template>
+
+    <template id="t-match-summary">
+        <div class="flex flex-col md:flex-row h-auto md:h-48 glass-panel border-x-0 border-t-0 shrink-0 z-20">
+            <!-- Left: Partnership -->
+            <div class="w-full md:w-[35%] border-b md:border-b-0 md:border-r border-white/5 flex flex-col relative p-2 h-36 md:h-full">
+                <div class="label-text text-center mb-1">Partnership</div>
+                <div class="flex-1 flex flex-col justify-between gap-1.5">
+                    <!-- Striker -->
+                    <div class="flex-1 rounded-lg flex items-center justify-between px-3 pr-7 cursor-pointer transition-all duration-200 border border-transparent bg-slate-800/30 hover:bg-slate-800/60"
+                         :class="!striker ? 'selection-required' : (inputMode==='wicket'&&wicketState.player===striker?.id?'bg-red-900/20 border-red-500/50':'border-l-4 border-l-neon-blue bg-blue-900/5')"
+                         @click="$emit('card-click', 'striker')">
+                        <div class="flex flex-col">
+                            <div class="flex items-center gap-1.5"><i class="ph-fill ph-star text-neon-blue text-[10px]"></i><span class="text-[9px] font-black text-neon-blue">STRIKER</span></div>
+                            <div class="text-sm font-bold text-white truncate w-32 mt-0.5">{{ !striker ? 'Select Player' : striker.name }}</div>
+                        </div>
+                        <div v-if="striker" class="text-right">
+                            <div class="text-xl font-black font-display text-white leading-none">{{ strikerStats.runs }}</div>
+                            <div class="text-[9px] text-slate-400 font-mono">{{ strikerStats.balls }}b</div>
+                        </div>
+                    </div>
+
+                    <!-- Non-Striker -->
+                    <div class="flex-1 rounded-lg flex items-center justify-between px-3 pr-7 cursor-pointer transition-all duration-200 border border-transparent bg-slate-800/30 hover:bg-slate-800/60"
+                         :class="!nonStriker ? 'selection-required' : (inputMode==='wicket'&&wicketState.player===nonStriker?.id?'bg-red-900/20 border-red-500/50':'border-l-4 border-l-blue-400/50 bg-blue-900/5')"
+                         @click="$emit('card-click', 'nonStriker')">
+                         <div class="flex flex-col">
+                            <span class="text-[9px] font-bold text-blue-300/80 ml-0.5">NON-STRIKER</span>
+                            <div class="text-sm font-bold text-slate-200 truncate w-32 mt-0.5">{{ !nonStriker ? 'Select Player' : nonStriker.name }}</div>
+                        </div>
+                        <div v-if="nonStriker" class="text-right">
+                            <div class="text-xl font-black font-display text-slate-300 leading-none">{{ nonStrikerStats.runs }}</div>
+                            <div class="text-[9px] text-slate-500 font-mono">{{ nonStrikerStats.balls }}b</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-auto pt-1 border-t border-white/5 bg-slate-900/40 rounded-b p-1 flex justify-between items-center px-2">
+                    <div class="label-text text-[8px] opacity-70">PARTNERSHIP</div>
+                    <div class="text-xs font-mono text-slate-300 flex items-center gap-2">
+                        <span class="text-white font-black text-sm">{{ stats.partnership.runs }}</span>(R) / <span class="text-white font-black">{{ stats.partnership.balls }}</span>(B)
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Center: Score -->
+            <div class="w-full md:w-[30%] border-b md:border-b-0 md:border-r border-white/5 relative overflow-hidden flex flex-col h-32 md:h-full p-2 justify-between bg-slate-900/50">
+                <div class="text-center relative z-10"><div class="label-text tracking-[0.3em] mb-1">{{ match.battingFirst }}</div></div>
+                <div class="flex flex-col items-center justify-center flex-1 relative z-10">
+                    <div class="flex items-baseline gap-1 scale-110">
+                        <div class="text-6xl font-black font-display text-white tracking-tighter drop-shadow-2xl">{{ stats.score.split('/')[0] }}</div>
+                        <span class="text-red-500 text-4xl font-display font-bold">/{{ stats.score.split('/')[1] }}</span>
+                    </div>
+                    <div class="text-xs font-mono font-bold text-neon-green mt-1 bg-emerald-900/10 border border-emerald-500/20 rounded-full px-3 py-0.5 shadow-[0_0_10px_rgba(16,185,129,0.1)]">{{ stats.overs }} <span class="text-[9px] uppercase text-emerald-600 ml-1">OVERS</span></div>
+                </div>
+                <div class="grid grid-cols-3 divide-x divide-white/5 bg-black/20 rounded border border-white/5 py-1.5 text-center relative z-10">
+                    <div><span class="label-text block mb-0.5">CRR</span><span class="text-xs font-mono font-bold text-white">{{ stats.crr }}</span></div>
+                    <div><span class="label-text block mb-0.5">EXTRAS</span><span class="text-xs font-mono font-bold text-white">{{ stats.extras.total }}</span></div>
+                    <div><span class="label-text block mb-0.5">{{ match.currentInning===2 ? 'REQ' : 'PROJ' }}</span><span class="text-xs font-mono font-bold text-neon-blue">{{ match.currentInning===2 ? (stats.rrr || '-') : Math.round(stats.crr * match.overs) }}</span></div>
+                </div>
+            </div>
+
+            <!-- Right: Bowler -->
+            <div class="w-full md:w-[35%] flex flex-col p-1.5 h-36 md:h-full relative">
+                <div class="flex-1 rounded-lg border border-slate-700 bg-slate-800/30 flex flex-col justify-between overflow-hidden shadow-inner transition-all duration-300 group relative" 
+                     :class="!bowler ? 'border-yellow-500/50 bg-yellow-900/5 animate-breathing' : ''"
+                     @click="$emit('card-click', 'bowler')">
+                    <div class="px-3 py-2 border-b border-white/5 flex justify-between items-center bg-white/5 pr-8">
+                        <div><div class="text-[8px] text-neon-cyan font-bold uppercase tracking-wider">Current Bowler</div><div class="text-sm font-bold text-white truncate w-32">{{ !bowler ? 'Select Bowler' : bowler.name }}</div></div>
+                        <div v-if="bowler" class="text-right"><div class="text-xl font-black font-display text-cyan-100">{{ bowlerStats.figures.split('(')[0] }}</div></div>
+                    </div>
+                    <div class="flex-1 grid grid-cols-4 items-center text-center px-1">
+                        <div><span class="label-text block">Ov</span><span class="data-text">{{ bowlerStats.overs }}</span></div>
+                        <div><span class="label-text block">Run</span><span class="data-text text-amber-200">{{ bowlerStats.runs }}</span></div>
+                        <div><span class="label-text block">Wkt</span><span class="data-text text-red-300">{{ bowlerStats.wickets }}</span></div>
+                        <div><span class="label-text block">Eco</span><span class="data-text text-emerald-300">{{ bowlerStats.econ }}</span></div>
+                    </div>
+                    <div class="bg-black/20 px-3 py-1.5 flex gap-1.5 overflow-x-auto no-scrollbar border-t border-white/5 h-9 items-center">
+                        <div class="text-[8px] font-bold text-slate-600 mr-1 shrink-0 uppercase tracking-widest">Over</div>
+                        <div v-for="d in stats.recentBalls" :key="d.id" class="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0 border transition-all shadow-lg" 
+                            :class="d.isWicket ? 'bg-red-600 border-red-500' : (d.runs==4 ? 'bg-emerald-600 border-emerald-500' : (d.runs==6 ? 'bg-purple-600 border-purple-500' : (d.extras.wide||d.extras.noBall ? 'bg-amber-600 border-amber-500' : 'bg-slate-700 border-slate-600')))">
+                            {{ d.label }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="t-player-card">
+        <div class="game-card group cursor-pointer" :class="cardClasses" @click="$emit('click', player)">
+            <div class="p-2 flex justify-between items-start">
+                <div class="flex-1 min-w-0 pr-1"><div class="text-sm font-bold text-white truncate">{{ player.name }}</div></div>
+            </div>
+            <div class="px-2 text-center py-1">
+                <div class="text-3xl font-black font-display text-white leading-none tracking-tight">{{ variant==='batter'?stats.runs:stats.wickets }}</div>
+                <div class="label-text text-[8px]">{{ variant==='batter'?'Runs':'Wickets' }}</div>
+            </div>
+            <div class="grid border-t border-white/5 bg-black/20 text-center py-1.5" :class="variant==='batter' ? 'grid-cols-4' : 'grid-cols-4'">
+                <template v-if="variant === 'batter'">
+                    <div class="flex flex-col"><span class="label-text">B</span><span class="data-text text-slate-300">{{ stats.balls }}</span></div>
+                    <div class="flex flex-col border-l border-white/5"><span class="label-text">4s</span><span class="data-text text-blue-400">{{ stats.fours }}</span></div>
+                    <div class="flex flex-col border-l border-white/5"><span class="label-text">6s</span><span class="data-text text-purple-400">{{ stats.sixes }}</span></div>
+                    <div class="flex flex-col border-l border-white/5"><span class="label-text">SR</span><span class="data-text text-emerald-400">{{ stats.sr }}</span></div>
+                </template>
+                <template v-else>
+                    <div class="flex flex-col"><span class="label-text text-[7px]">O</span><span class="data-text text-slate-300 text-xs">{{ stats.overs }}</span></div>
+                    <div class="flex flex-col border-l border-white/5"><span class="label-text text-[7px]">R</span><span class="data-text text-slate-400 text-xs">{{ stats.runs }}</span></div>
+                    <div class="flex flex-col border-l border-white/5"><span class="label-text text-[7px]">E</span><span class="data-text text-emerald-300 text-xs">{{ stats.econ }}</span></div>
+                    <div class="flex flex-col border-l border-white/5"><span class="label-text text-[7px]">WD</span><span class="data-text text-amber-300 text-xs">{{ stats.wides }}</span></div>
+                </template>
+            </div>
+        </div>
+    </template>
+
+    <template id="t-control-pad">
+        <div class="bg-slate-900 border-t border-slate-800 h-44 shrink-0 z-40 relative shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+            <div v-if="inningsStatus !== 'active'" class="absolute inset-0 bg-slate-950/90 z-50 flex items-center justify-center backdrop-blur-sm">
+                <button @click="$emit('start-innings')" class="btn-action bg-emerald-600 hover:bg-emerald-500 text-white shadow-glow-green px-10 py-4 text-xl"><i class="ph-fill ph-play-circle text-3xl mr-2"></i> Start Innings</button>
+            </div>
+            
+            <div class="h-full flex">
+                <!-- Left: Utils -->
+                <div class="w-[16%] border-r border-slate-800 flex flex-col p-1.5 gap-1.5 justify-center bg-slate-850">
+                    <button @click="$emit('swap')" class="btn-score bg-slate-800 hover:bg-slate-700 h-full flex-col gap-1 text-sm"><i class="ph-bold ph-arrows-left-right text-xl"></i> <span class="text-[9px] font-bold uppercase">Swap</span></button>
+                    <button @click="$emit('retire')" class="btn-score bg-slate-800 hover:bg-slate-700 h-full flex-col gap-1 text-sm"><i class="ph-bold ph-door-open text-xl"></i> <span class="text-[9px] font-bold uppercase">Retire</span></button>
+                </div>
+                
+                <!-- Center: Scoring -->
+                <div class="flex-1 relative bg-slate-950 p-2 w-[68%]">
+                    <!-- Normal Mode -->
+                    <div v-if="inputMode === 'normal'" class="absolute inset-2 flex gap-2">
+                        <div class="flex-1 grid grid-cols-3 grid-rows-2 gap-2" :class="!canScore ? 'opacity-30 pointer-events-none' : ''">
+                            <button v-for="r in [0,1,2,3]" :key="r" @click="$emit('score', r)" class="btn-score">{{ r }}</button>
+                            <button @click="$emit('score', 4)" class="btn-score border-blue-600 text-blue-400 hover:bg-blue-900/30">4</button>
+                            <button @click="$emit('score', 6)" class="btn-score border-emerald-600 text-emerald-400 hover:bg-emerald-900/30">6</button>
+                        </div>
+                        <div class="w-[25%] flex flex-col gap-2">
+                            <div class="flex-1 flex flex-col gap-1">
+                                <div class="flex gap-1 h-1/2">
+                                    <button @click="$emit('toggle-wide')" class="btn-action w-full h-full text-xs border flex-1" :class="deliveryModifiers.isWide ? 'bg-amber-600 text-white border-amber-500' : 'border-amber-800 text-amber-500 hover:bg-amber-900/20'">WD</button>
+                                    <button @click="$emit('toggle-noball')" class="btn-action w-full h-full text-xs border flex-1" :class="deliveryModifiers.isNoBall ? 'bg-amber-600 text-white border-amber-500' : 'border-amber-800 text-amber-500 hover:bg-amber-900/20'">NB</button>
+                                </div>
+                                <button @click="$emit('wicket-mode')" class="btn-action w-full h-1/2 bg-red-900/20 border border-red-600 text-red-500 hover:bg-red-900/40 text-xs font-black">OUT</button>
+                            </div>
+                            <button @click="$emit('undo')" class="btn-action h-14 border border-orange-600/50 text-orange-400 hover:bg-orange-900/20 hover:text-orange-300 flex-col gap-0"><i class="ph-bold ph-arrow-u-up-left text-xl"></i><span class="text-[9px] uppercase font-bold">UNDO</span></button>
+                        </div>
+                    </div>
+                    <!-- Wicket Mode -->
+                    <div v-if="inputMode === 'wicket'" class="absolute inset-0 p-2 bg-slate-900 z-10 flex flex-col gap-2">
+                        <div class="grid grid-cols-3 gap-1 h-1/3">
+                            <button v-for="type in ['Caught','Bowled','LBW','Run Out','Stumped','Hit Wicket']" :key="type" @click="wicketState.type = type" class="btn-action text-[10px] border border-slate-700 hover:bg-slate-800 text-slate-300" :class="wicketState.type === type ? 'bg-red-600 border-red-500 text-white' : ''">{{ type }}</button>
+                        </div>
+                        <div class="flex gap-2 h-1/3">
+                            <div class="flex-1 bg-slate-800 rounded border border-slate-700 flex items-center px-2 gap-2"><span class="label-text">Runs:</span><div class="flex gap-1 flex-1"><button v-for="r in [0,1,2,3]" :key="r" @click="wicketState.runs = r" class="flex-1 h-8 rounded text-sm font-bold transition-colors" :class="wicketState.runs === r ? 'bg-white text-black' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'">{{r}}</button></div></div>
+                            <div class="w-1/3 flex gap-1"><button @click="wicketState.extra = (wicketState.extra === 'wd' ? 'none' : 'wd')" class="flex-1 rounded border font-bold text-xs" :class="wicketState.extra === 'wd' ? 'bg-amber-600 text-white border-amber-500' : 'border-slate-700 text-slate-400 hover:bg-slate-800'">WD</button><button @click="wicketState.extra = (wicketState.extra === 'nb' ? 'none' : 'nb')" class="flex-1 rounded border font-bold text-xs" :class="wicketState.extra === 'nb' ? 'bg-amber-600 text-white border-amber-500' : 'border-slate-700 text-slate-400 hover:bg-slate-800'">NB</button></div>
+                        </div>
+                        <div class="flex gap-2 h-1/3"><button @click="$emit('cancel-wicket')" class="btn-action w-1/3 bg-transparent border border-slate-600 text-slate-400 hover:text-white">Cancel</button><button @click="$emit('confirm-wicket')" class="btn-action flex-1 bg-red-600 hover:bg-red-500 text-white gap-2 shadow-glow-red"><i class="ph-fill ph-check-circle"></i> Confirm</button></div>
+                    </div>
+                </div>
+                
+                <!-- Right: Menus -->
+                <div class="w-[16%] border-l border-slate-800 flex flex-col bg-slate-900">
+                    <button @click="$emit('open-settings')" class="flex-1 hover:bg-slate-800 text-slate-400 hover:text-white flex flex-col items-center justify-center gap-1 border-b border-slate-800 transition-colors"><i class="ph-bold ph-sliders text-2xl"></i><span class="text-[9px] font-bold uppercase">Match</span></button>
+                    <button @click="$emit('open-innings')" class="flex-1 hover:bg-slate-800 text-blue-400 hover:text-blue-300 flex flex-col items-center justify-center gap-1 transition-colors"><i class="ph-bold ph-flag text-2xl"></i><span class="text-[9px] font-bold uppercase">Innings</span></button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="t-scorecard-view">
+        <div class="flex-1 overflow-y-auto p-4 bg-slate-950 text-slate-300">
+            <template v-if="match">
+                <div class="space-y-6">
+                    <template v-for="inn in [1, 2]" :key="inn">
+                        <div v-if="data(inn)" class="rounded-xl border border-slate-700 bg-slate-900/50 overflow-hidden shadow-md">
+                            <div class="bg-slate-900/80 px-4 py-3 border-b border-slate-700 flex justify-between items-center">
+                                <div class="text-sm font-bold text-white uppercase tracking-wide">{{ data(inn).teamName }} <span class="text-slate-500 text-xs ml-2 normal-case">Innings {{ inn }}</span></div>
+                                <div class="font-mono text-emerald-400 font-bold text-lg">{{ data(inn).total }} <span class="text-slate-500 text-xs font-sans">({{ data(inn).overs }})</span></div>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-xs">
+                                    <thead class="text-slate-500 border-b border-slate-700/50 bg-slate-900/20"><tr><th class="p-2 pl-4 font-normal">BATTER</th><th class="font-normal">DISMISSAL</th><th class="p-2 text-right font-normal">R</th><th class="p-2 text-right font-normal">B</th><th class="p-2 text-right font-normal">4s</th><th class="p-2 text-right font-normal">6s</th><th class="p-2 text-right pr-4 font-normal">SR</th></tr></thead>
+                                    <tbody class="text-slate-300 divide-y divide-slate-700/30">
+                                        <tr v-for="p in data(inn).batting" :key="p.id" class="hover:bg-white/5 transition-colors" :class="p.status==='batting'?'text-white font-bold bg-white/5':''">
+                                            <td class="p-2 pl-4"><span :class="p.status==='out'?'text-red-400 line-through decoration-red-900':''">{{ p.name }}</span><span v-if="p.status==='batting'" class="text-[10px] ml-1 text-emerald-400">*</span></td>
+                                            <td class="p-2 text-[10px] text-slate-500 italic">{{ p.dismissalText }}</td>
+                                            <td class="p-2 text-right font-bold text-white">{{ p.runs }}</td>
+                                            <td class="p-2 text-right text-slate-400">{{ p.balls }}</td>
+                                            <td class="p-2 text-right text-slate-500">{{ p.fours }}</td>
+                                            <td class="p-2 text-right text-slate-500">{{ p.sixes }}</td>
+                                            <td class="p-2 text-right pr-4 text-slate-500">{{ p.sr }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="px-4 py-2 text-xs border-y border-slate-700/50 bg-slate-900/30 flex justify-between items-center text-slate-400"><span>Extras</span><div><span class="font-bold text-white">{{ data(inn).extras.total }}</span> <span class="text-[10px] ml-1 text-slate-500">(wd {{ data(inn).extras.wide }}, nb {{ data(inn).extras.noBall }}, b {{ data(inn).extras.byes }})</span></div></div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <script type="module" src="./main.js"></script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
